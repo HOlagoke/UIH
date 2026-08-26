@@ -1,0 +1,88 @@
+# ============================================================
+# 00_setup.R — Shared configuration, paths, and helpers
+# Sourced by every other script. Does not run any analysis.
+# ============================================================
+
+library(here)
+library(tidyverse)
+
+# ---- Locked design constants (see docs/data_conventions.docx) ----
+COUNTY_FIPS   <- c("36059", "36103")   # Nassau, Suffolk
+COUNTY_CODES  <- c("059", "103")       # county-only form, for tidycensus/tigris
+ACS_YEAR      <- 2019                  # ACS 2015-2019 5-year estimates
+TRACT_VINTAGE <- 2010                  # locked tract vintage
+N_ANALYTIC    <- 598                   # expected analytic universe
+
+# ---- Paths (all relative to project root via here::here) ----
+path_raw   <- function(...) here("data", "raw", ...)
+path_clean <- function(...) here("data", "clean", ...)
+path_table <- function(...) here("output", "tables", ...)
+path_fig   <- function(...) here("output", "figures", ...)
+
+# ---- Covariate sets ----
+# Defined once here rather than retyped in each model formula.
+COVARS_BASE   <- c("pct_age65", "pct_nh_black", "pct_hispanic")
+COVARS_CANCER <- c(COVARS_BASE, "csmoking_crude_prev")
+
+# Smoking is deliberately excluded from the mental health models as a
+# plausible mediator rather than a confounder. Do not "fix" this.
+
+#' Build a beta regression formula from an outcome, a pollutant, and covariates
+#'
+#' @param outcome  character, e.g. "cancer_prop"
+#' @param pollutant character, "no2" or "pm25", or NULL for covariate-only
+#' @param covars   character vector of covariate names
+#' @param extra    optional additional terms (e.g. "pct_uninsured")
+build_formula <- function(outcome, pollutant = NULL, covars = COVARS_BASE, extra = NULL) {
+  rhs <- c(pollutant, covars, extra)
+  as.formula(paste(outcome, "~", paste(rhs, collapse = " + ")))
+}
+
+#' Read the final analytic file with correct column types and derived proportions
+read_analytic <- function(path = path_clean("analytic_final.csv")) {
+  read_csv(path,
+           col_types = cols(geoid = col_character(),
+                            county_fips = col_character())) |>
+    mutate(
+      cancer_prop     = cancer_crude_prev / 100,
+      depression_prop = depression_crude_prev / 100,
+      fmd_prop        = mhlth_crude_prev / 100
+    )
+}
+
+#' Extract one pollutant term from a betareg model as a tidy one-row tibble
+tidy_pollutant <- function(model, term_name, outcome_label, pollutant_label) {
+  ci <- confint(model)
+  s  <- summary(model)$coefficients$mean
+  tibble(
+    outcome     = outcome_label,
+    pollutant   = pollutant_label,
+    coefficient = s[term_name, "Estimate"],
+    ci_low      = ci[term_name, 1],
+    ci_high     = ci[term_name, 2],
+    p_value     = s[term_name, "Pr(>|z|)"]
+  )
+}
+
+#' Pull a single coefficient or p-value from a betareg model
+coef_of  <- function(model, term) summary(model)$coefficients$mean[term, "Estimate"]
+pval_of  <- function(model, term) summary(model)$coefficients$mean[term, "Pr(>|z|)"]
+
+#' Human-readable variable labels for descriptive tables
+VARIABLE_LABELS <- c(
+  cancer_crude_prev      = "Cancer prevalence (%)",
+  depression_crude_prev  = "Depression prevalence (%)",
+  mhlth_crude_prev       = "Frequent mental distress prevalence (%)",
+  no2                    = "NO2 (ppb)",
+  pm25                   = "PM2.5 (ug/m3)",
+  o3                     = "O3 (ppb)",
+  deprivation_index      = "Deprivation index (standardized)",
+  pct_age65              = "% Age 65+",
+  csmoking_crude_prev    = "Smoking prevalence (%)",
+  pct_nh_black           = "% Non-Hispanic Black",
+  pct_hispanic           = "% Hispanic"
+)
+
+label_variables <- function(df, col = variable) {
+  df |> mutate({{ col }} := coalesce(VARIABLE_LABELS[{{ col }}], {{ col }}))
+}
