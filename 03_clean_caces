@@ -1,0 +1,42 @@
+# ============================================================
+# 03_clean_caces.R — CACES empirical model pollutant estimates
+# Input:  data/raw/caces_aap_2015_2019.csv  (manual download)
+# Output: data/clean/analytic_caces_clean.csv
+#
+# Collapses the annual series to a single 2015-2019 mean per tract
+# per pollutant, representing chronic exposure.
+# ============================================================
+
+source(here::here("R", "00_setup.R"))
+
+caces_raw_path <- path_raw("caces_aap_2015_2019.csv")
+
+if (!file.exists(caces_raw_path)) {
+  stop("CACES raw file not found at ", caces_raw_path,
+       "\nDownload from https://www.caces.us/data and place it there.")
+}
+
+caces <- read_csv(caces_raw_path, col_types = cols(.default = col_guess()))
+message("CACES raw dimensions: ", nrow(caces), " rows x ", ncol(caces), " cols")
+
+caces_avg <- caces |>
+  mutate(geoid = as.character(fips),
+         county_fips = str_sub(geoid, 1, 5)) |>
+  filter(county_fips %in% COUNTY_FIPS) |>
+  mutate(county_name = case_when(county_fips == "36059" ~ "Nassau",
+                                 county_fips == "36103" ~ "Suffolk")) |>
+  group_by(geoid, county_fips, county_name, pollutant) |>
+  summarise(avg_pred_weight = mean(pred_wght), .groups = "drop")
+
+caces_wide <- caces_avg |>
+  pivot_wider(names_from = pollutant, values_from = avg_pred_weight)
+
+# ---- Checks ------------------------------------------------
+
+stopifnot(
+  all(nchar(caces_wide$geoid) == 11),
+  all(c("no2", "pm25", "o3") %in% names(caces_wide))
+)
+message("CACES tracts retained: ", nrow(caces_wide))  # expect 601
+
+write_csv(caces_wide, path_clean("analytic_caces_clean.csv"))
