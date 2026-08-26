@@ -1,0 +1,66 @@
+# ---- R session artifacts ----
+.Rhistory
+.Rapp.history
+.RData
+.Ruserdata
+*.Rproj.user/
+.Rproj.user
+.Rprofile.local
+
+# ---- Secrets ----
+.Renviron
+.env
+*_api_key*
+*credentials*
+
+# ---- renv: lockfile is tracked, library is not ----
+renv/library/
+renv/local/
+renv/cellar/
+renv/lock/
+renv/python/
+renv/staging/
+renv/sandbox/
+
+# ---- Cached spatial downloads (large, regenerable) ----
+# tigris cache, TIGER/Line shapefiles pulled at runtime
+data/raw/tiger/
+data/cache/
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.sbn
+*.sbx
+
+# ---- Restricted-source data (see README: Data availability) ----
+# NYSPACED / SEER*Stat exports are governed by a NYSCR data use
+# agreement. Raw exports stay local; only derived rates are shared.
+data/raw/nyspaced/
+*.sldiii
+*.dic
+
+# ---- Large intermediates ----
+data/interim/
+*.rds
+!data/processed/*.rds
+
+# ---- Model objects (brms fits can be hundreds of MB) ----
+output/models/*.rds
+output/models/*.stan
+output/models/*.rda
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+*~
+.vscode/
+.idea/
+
+# ---- LaTeX build artifacts from table generation ----
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
