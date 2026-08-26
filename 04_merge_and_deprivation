@@ -1,0 +1,118 @@
+# ============================================================
+# 04_merge_and_deprivation.R
+# Merges ACS + PLACES + CACES on tract GEOID, applies exclusions,
+# builds the Yost-style deprivation index via PCA.
+#
+# Outputs: data/clean/analytic_merged_full.csv  (pre-exclusion)
+#          data/clean/analytic_final.csv        (analytic universe)
+#          data/clean/nses_pca_loadings.csv
+#          output/tables/table1_tract_flow.csv
+# ============================================================
+
+source(here::here("R", "00_setup.R"))
+
+acs <- read_csv(path_clean("analytic_acs_clean.csv"),
+                col_types = cols(geoid = col_character(), county_fips = col_character()))
+places <- read_csv(path_clean("analytic_places_clean.csv"),
+                   col_types = cols(geoid = col_character(), county_fips = col_character()))
+caces <- read_csv(path_clean("analytic_caces_clean.csv"),
+                  col_types = cols(geoid = col_character(), county_fips = col_character()))
+
+# ---- Exclusions --------------------------------------------
+# Phantom = zero-population tracts. GQ = tracts over the 50% group-quarters
+# threshold (correctional facilities, dormitories, nursing homes).
+# 36059980100 appears in both; it is counted once, under group quarters.
+
+phantom <- c("36103990100", "36059980100", "36059990100", "36059990200",
+             "36059990301", "36059990302", "36059990400")
+gq      <- c("36059980100", "36059981100", "36059982100")
+
+all_excluded  <- union(phantom, gq)
+n_phantom_only <- length(setdiff(phantom, gq))
+n_gq           <- length(gq)
+
+# ---- Merge (ACS is the spine — most complete tract list) ----
+
+analytic_merged <- acs |>
+  left_join(places |> select(-any_of(c("county_fips", "county_name"))), by = "geoid") |>
+  left_join(caces  |> select(-any_of(c("county_fips", "county_name"))), by = "geoid")
+
+analytic_merged_excl <- analytic_merged |> filter(!(geoid %in% all_excluded))
+
+stopifnot(nrow(analytic_merged_excl) == N_ANALYTIC)
+
+write_csv(analytic_merged,      path_clean("analytic_merged_full.csv"))
+write_csv(analytic_merged_excl, path_clean("analytic_merged.csv"))
+
+# ---- Deprivation index (PCA on six Yost variables) ---------
+# Median gross rent is one of the seven standard Yost variables but is
+# excluded here for variable-specific missingness (64/598 tracts, 10.7%).
+
+yost_vars <- c("pct_below_150_pov", "edu_index", "pct_blue_collar",
+               "pct_unemployed", "log_income", "log_home_value")
+
+pca_input <- analytic_merged_excl |>
+  select(geoid, med_h_income_est, med_h_value_est, pct_below_150_pov,
+         edu_index, pct_blue_collar, pct_unemployed) |>
+  mutate(log_income = log(med_h_income_est),
+         log_home_value = log(med_h_value_est))
+
+# No missingness permitted in the index inputs — fail loudly rather than
+# silently dropping tracts inside prcomp().
+stopifnot(!any(is.na(pca_input |> select(all_of(yost_vars)))))
+
+pca_result <- pca_input |>
+  select(all_of(yost_vars)) |>
+  prcomp(center = TRUE, scale. = TRUE)
+
+# PC1's sign is arbitrary. Orient it so that higher = more deprived by
+# forcing a positive correlation with the tract poverty rate, rather than
+# hardcoding a *-1 flip that would silently invert if the data changed.
+raw_pc1 <- pca_result$x[, 1]
+orientation <- sign(cor(raw_pc1, pca_input$pct_below_150_pov))
+deprivation_index <- raw_pc1 * orientation
+
+r_poverty <- cor(deprivation_index, pca_input$pct_below_150_pov)
+pct_var_pc1 <- summary(pca_result)$importance[2, 1] * 100
+
+message("PC1 explains ", round(pct_var_pc1, 1), "% of variance")
+message("Correlation of deprivation index with tract poverty rate: r = ",
+        round(r_poverty, 2))
+stopifnot(r_poverty > 0)   # index must run in the deprived-is-high direction
+
+scores_df <- tibble(geoid = pca_input$geoid,
+                    deprivation_index = deprivation_index) |>
+  mutate(deprivation_quintile = ntile(deprivation_index, 5))
+
+analytic_final <- analytic_merged_excl |> left_join(scores_df, by = "geoid")
+
+pca_diagnostics <- tibble(
+  variable         = rownames(pca_result$rotation),
+  pc1_loading      = pca_result$rotation[, 1] * orientation,
+  pct_variance_pc1 = pct_var_pc1
+)
+
+write_csv(pca_diagnostics, path_clean("nses_pca_loadings.csv"))
+write_csv(analytic_final,  path_clean("analytic_final.csv"))
+
+# ---- TABLE 1 — Tract exclusion flow and per-outcome N ------
+
+outcome_n <- analytic_final |>
+  summarise(cancer     = sum(!is.na(cancer_crude_prev)),
+            depression = sum(!is.na(depression_crude_prev)),
+            fmd        = sum(!is.na(mhlth_crude_prev)))
+
+table1 <- tibble(
+  stage = c("ACS spine (raw pull)",
+            "Minus zero-population phantom tracts",
+            "Minus group-quarters tracts (incl. 1 phantom overlap)",
+            "Final analytic universe",
+            "Cancer model available-case N",
+            "Depression model available-case N",
+            "FMD model available-case N"),
+  n = c(nrow(acs), -n_phantom_only, -n_gq, nrow(analytic_final),
+        outcome_n$cancer, outcome_n$depression, outcome_n$fmd)
+)
+
+print(table1)
+write_csv(table1, path_table("table1_tract_flow.csv"))
