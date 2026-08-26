@@ -1,0 +1,139 @@
+# ============================================================
+# 01_pull_acs.R — American Community Survey 2015-2019 5-year estimates
+# Output: data/clean/analytic_acs_clean.csv
+#
+# Requires a Census API key in .Renviron as CENSUS_API_KEY.
+# See .Renviron.example. Never hardcode the key in this file.
+# ============================================================
+
+source(here::here("R", "00_setup.R"))
+library(tidycensus)
+
+if (Sys.getenv("CENSUS_API_KEY") == "") {
+  stop("CENSUS_API_KEY not found. Add it to .Renviron (see .Renviron.example), ",
+       "then restart R or run readRenviron('~/.Renviron').")
+}
+
+# ---- Variable definitions ----------------------------------
+
+direct_vars <- c(med_h_income = "B19013_001", med_h_value = "B25077_001",
+                 med_rent_gross = "B25064_001", total_est = "B01003_001")
+
+race_vars <- c(race_total_est = "B03002_001", non_his_white = "B03002_003",
+               non_his_black = "B03002_004", eth_hispanic = "B03002_012")
+
+grp_quar_var <- c(group_quarter = "B26001_001")
+
+pov_var <- c(pov_total_est = "C17002_001", pov_under_50 = "C17002_002",
+             pov_50_99 = "C17002_003", pov_1_124 = "C17002_004",
+             pov_125_149 = "C17002_005")
+
+occu_vars <- c(occu_total_est = "C24010_001",
+               occu_m_nat_constr = "C24010_030", occu_m_trans_prod = "C24010_034",
+               occu_f_nat_constr = "C24010_066", occu_f_trans_prod = "C24010_070")
+
+edu_vars <- c(
+  edu_total_est = "B15003_001", edu_no_school = "B15003_002",
+  edu_nursery = "B15003_003", edu_kindergarten = "B15003_004",
+  edu_1st_grd = "B15003_005", edu_2nd_grd = "B15003_006",
+  edu_3rd_grd = "B15003_007", edu_4th_grd = "B15003_008",
+  edu_5th_grd = "B15003_009", edu_6th_grd = "B15003_010",
+  edu_7th_grd = "B15003_011", edu_8th_grd = "B15003_012",
+  edu_9th_grd = "B15003_013", edu_10th_grd = "B15003_014",
+  edu_11th_grd = "B15003_015", edu_12th_no_dip = "B15003_016",
+  edu_hs_dip = "B15003_017", edu_ged = "B15003_018",
+  edu_coll_less_than_1 = "B15003_019", edu_coll_1_nd = "B15003_020",
+  edu_associates = "B15003_021", edu_bachelors = "B15003_022",
+  edu_masters = "B15003_023", edu_professional = "B15003_024",
+  edu_doctorate = "B15003_025")
+
+age_vars <- c(
+  age_total_est = "B01001_001",
+  age_m_65_66 = "B01001_020", age_m_67_69 = "B01001_021", age_m_70_74 = "B01001_022",
+  age_m_75_79 = "B01001_023", age_m_80_84 = "B01001_024", age_m_85_plus = "B01001_025",
+  age_f_65_66 = "B01001_044", age_f_67_69 = "B01001_045", age_f_70_74 = "B01001_046",
+  age_f_75_79 = "B01001_047", age_f_80_84 = "B01001_048", age_f_85_plus = "B01001_049")
+
+unins_vars <- c(
+  unins_total_est = "B27001_001",
+  unins_m_under6 = "B27001_005", unins_m_6_18 = "B27001_008",
+  unins_m_19_25 = "B27001_011", unins_m_26_34 = "B27001_014",
+  unins_m_35_44 = "B27001_017", unins_m_45_54 = "B27001_020",
+  unins_m_55_64 = "B27001_023", unins_m_65_74 = "B27001_026",
+  unins_m_older75 = "B27001_029",
+  unins_f_under6 = "B27001_033", unins_f_6_18 = "B27001_036",
+  unins_f_19_25 = "B27001_039", unins_f_26_34 = "B27001_042",
+  unins_f_35_44 = "B27001_045", unins_f_45_54 = "B27001_048",
+  unins_f_55_64 = "B27001_051", unins_f_65_74 = "B27001_054",
+  unins_f_older75 = "B27001_057")
+
+labor_vars <- c(labor_civilian = "B23025_003", labor_unemploy = "B23025_005")
+
+acs_vars <- c(direct_vars, race_vars, grp_quar_var, pov_var,
+              occu_vars, edu_vars, age_vars, unins_vars, labor_vars)
+
+# ---- Pull --------------------------------------------------
+
+acs_raw <- get_acs(geography = "tract", variables = acs_vars,
+                   year = ACS_YEAR, state = "NY", survey = "acs5",
+                   county = COUNTY_CODES, output = "wide")
+
+write_csv(acs_raw, path_raw("acs_2015_2019_raw.csv"))
+
+# ---- Derive ------------------------------------------------
+
+acs_final <- acs_raw |>
+  rename(geoid = GEOID) |>
+  mutate(county_fips = str_sub(geoid, 1, 5), .before = 3) |>
+  mutate(county_name = case_when(county_fips == "36059" ~ "Nassau",
+                                 county_fips == "36103" ~ "Suffolk")) |>
+  mutate(
+    pct_nh_white      = non_his_whiteE / race_total_estE * 100,
+    pct_nh_black      = non_his_blackE / race_total_estE * 100,
+    pct_hispanic      = eth_hispanicE  / race_total_estE * 100,
+    pct_below_150_pov = (pov_under_50E + pov_50_99E + pov_1_124E + pov_125_149E) /
+                        pov_total_estE * 100,
+    pct_unemployed    = labor_unemployE / labor_civilianE * 100,
+    pct_age65         = rowSums(across(matches("^age_[mf]_")))   / age_total_estE   * 100,
+    pct_uninsured     = rowSums(across(matches("^unins_[mf]_"))) / unins_total_estE * 100,
+    pct_blue_collar   = (occu_m_nat_constrE + occu_m_trans_prodE +
+                         occu_f_nat_constrE + occu_f_trans_prodE) / occu_total_estE * 100
+  ) |>
+  # Education index: years-of-schooling weights applied to attainment shares
+  mutate(
+    prop_less_hs      = (edu_no_schoolE + edu_nurseryE + edu_kindergartenE +
+                         edu_1st_grdE + edu_2nd_grdE + edu_3rd_grdE + edu_4th_grdE +
+                         edu_5th_grdE + edu_6th_grdE + edu_7th_grdE + edu_8th_grdE +
+                         edu_9th_grdE + edu_10th_grdE + edu_11th_grdE +
+                         edu_12th_no_dipE) / edu_total_estE,
+    prop_hs_grad      = (edu_hs_dipE + edu_gedE) / edu_total_estE,
+    prop_some_college = (edu_coll_less_than_1E + edu_coll_1_ndE + edu_associatesE) /
+                        edu_total_estE,
+    prop_bachelors    = edu_bachelorsE / edu_total_estE,
+    prop_grad_prof    = (edu_mastersE + edu_professionalE + edu_doctorateE) /
+                        edu_total_estE,
+    edu_index         = prop_less_hs * 10 + prop_hs_grad * 12 +
+                        prop_some_college * 14 + prop_bachelors * 16 +
+                        prop_grad_prof * 18
+  ) |>
+  select(geoid, county_fips, county_name, NAME,
+         med_h_incomeE, med_h_incomeM, med_h_valueE, med_h_valueM,
+         med_rent_grossE, med_rent_grossM, total_estE, group_quarterE,
+         pct_nh_white, pct_nh_black, pct_hispanic, pct_below_150_pov,
+         pct_unemployed, pct_age65, pct_uninsured, pct_blue_collar, edu_index) |>
+  rename(name = NAME,
+         med_h_income_est   = med_h_incomeE,   med_h_income_moe   = med_h_incomeM,
+         med_h_value_est    = med_h_valueE,    med_h_value_moe    = med_h_valueM,
+         med_rent_gross_est = med_rent_grossE, med_rent_gross_moe = med_rent_grossM,
+         total_pop_est      = total_estE,
+         group_quarter_est  = group_quarterE)
+
+# ---- Checks ------------------------------------------------
+
+stopifnot(
+  all(nchar(acs_final$geoid) == 11),
+  all(acs_final$county_fips %in% COUNTY_FIPS)
+)
+message("ACS tracts pulled: ", nrow(acs_final))  # expect 607
+
+write_csv(acs_final, path_clean("analytic_acs_clean.csv"))
