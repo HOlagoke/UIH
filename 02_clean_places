@@ -1,0 +1,39 @@
+# ============================================================
+# 02_clean_places.R — CDC PLACES 2021 release (2019 BRFSS)
+# Input:  data/raw/PLACES__Census_Tract_2021.csv  (manual download)
+# Output: data/clean/analytic_places_clean.csv
+# ============================================================
+
+source(here::here("R", "00_setup.R"))
+
+places_raw_path <- path_raw("PLACES__Census_Tract_2021.csv")
+
+if (!file.exists(places_raw_path)) {
+  stop("PLACES raw file not found at ", places_raw_path,
+       "\nDownload the 2021 census tract release from https://www.cdc.gov/places ",
+       "and place it there. See README for the exact release used.")
+}
+
+places <- read_csv(places_raw_path, col_types = cols(.default = col_guess()))
+message("PLACES raw dimensions: ", nrow(places), " rows x ", ncol(places), " cols")
+
+places_clean <- places |>
+  janitor::clean_names() |>
+  rename(geoid = tract_fips) |>
+  mutate(across(c(geoid, county_fips), as.character)) |>
+  filter(county_fips %in% COUNTY_FIPS) |>
+  select(county_name, county_fips, geoid, total_population, geolocation,
+         cancer_crude_prev, cancer_crude95ci,
+         csmoking_crude_prev, csmoking_crude95ci,
+         depression_crude_prev, depression_crude95ci,
+         mhlth_crude_prev, mhlth_crude95ci)
+
+# ---- Checks ------------------------------------------------
+
+na_counts <- places_clean |> summarise(across(everything(), ~ sum(is.na(.))))
+print(na_counts)
+
+stopifnot(all(nchar(places_clean$geoid) == 11))
+message("PLACES tracts retained: ", nrow(places_clean))  # expect 601
+
+write_csv(places_clean, path_clean("analytic_places_clean.csv"))
